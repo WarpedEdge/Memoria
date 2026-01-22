@@ -4,7 +4,6 @@
 
 .idea/
 .vs/
-.vscode/
 bin/
 obj/
 /packages/
@@ -25,4 +24,3 @@ obj/
 /Memoria.Injection/Debug/
 /Memoria.Injection/Release/
 /Memoria.Injection/x64/
-/.devcontainer/
