@@ -24,6 +24,9 @@ namespace Memoria.Assets
         {
             public Vector2[][] uv;
             public String[] texturePath;
+            public Texture2D[] textureAtlas;
+            public Vector2[][] blinkOpenUV;
+            public Vector2[][] blinkClosedUV;
         }
 
         private class CustomModelAnimated
@@ -68,6 +71,7 @@ namespace Memoria.Assets
                 baseMesh.vert = new Vector3[geometries.Count][];
                 baseMesh.tri = new Int32[geometries.Count][];
                 texture.uv = new Vector2[geometries.Count][];
+                texture.textureAtlas = new Texture2D[materials.Count];
                 anim.bw = new BoneWeight[geometries.Count][];
                 extra.normal = new Vector3[geometries.Count][];
                 extra.tangent = new Vector4[geometries.Count][];
@@ -118,11 +122,72 @@ namespace Memoria.Assets
                         anim.boneScale[i] = bone.Scale;
                     }
                 }
+                FbxUdimTexture[] udimTextures = new FbxUdimTexture[materials.Count];
+                String[] udimTexturePaths = new String[materials.Count];
+                Dictionary<String, FbxUdimTexture> udimTextureCache = new Dictionary<String, FbxUdimTexture>(StringComparer.Ordinal);
                 for (Int32 i = 0; i < materials.Count; i++)
                 {
                     baseMesh.shader[i] = materials[i].Shader;
                     if (materials[i].TexturePath != null)
-                        texture.texturePath[i] = AssetManager.UsePathWithDefaultFolder(folderPath, materials[i].TexturePath);
+                    {
+                        if (!FbxUdimTexture.IsUdimPath(materials[i].TexturePath))
+                        {
+                            texture.texturePath[i] = AssetManager.UsePathWithDefaultFolder(folderPath, materials[i].TexturePath);
+                        }
+                        else
+                        {
+                            if (!FbxUdimTexture.TryResolvePath(folderPath, materials[i].TexturePath, out String safeTexturePath, out String texturePath, out String pathError))
+                            {
+                                DestroyUdimTextures(udimTextureCache.Values);
+                                Log.Error($"Cannot import UDIM texture '{texturePath}' referenced by FBX '{completePath}': {pathError}");
+                                return null;
+                            }
+                            if (!hasTexture)
+                            {
+                                DestroyUdimTextures(udimTextureCache.Values);
+                                Log.Error($"Cannot import UDIM texture '{texturePath}' referenced by FBX '{completePath}': the model has no UV coordinates");
+                                return null;
+                            }
+                            if (!udimTextureCache.TryGetValue(safeTexturePath, out FbxUdimTexture udimTexture))
+                            {
+                                if (!FbxUdimTexture.TryCreate(safeTexturePath, out udimTexture, out String error))
+                                {
+                                    DestroyUdimTextures(udimTextureCache.Values);
+                                    Log.Error($"Cannot import UDIM texture '{texturePath}' referenced by FBX '{completePath}': {error}");
+                                    return null;
+                                }
+                                udimTextureCache.Add(safeTexturePath, udimTexture);
+                            }
+                            udimTextures[i] = udimTexture;
+                            udimTexturePaths[i] = texturePath;
+                            texture.textureAtlas[i] = udimTexture.Texture;
+                        }
+                    }
+                }
+                Boolean validBlinkSetup = TryPrepareUdimBlink(geometries, materials, baseMesh.matIndex, texture.uv, udimTextures, out Boolean blinkRequested, out Vector2[][] blinkOpenUV, out Vector2[][] blinkClosedUV, out String blinkError);
+                if (blinkRequested && !validBlinkSetup)
+                    Log.Warning($"Cannot enable UDIM blinking for FBX '{completePath}': {blinkError}. The model will use static UDIM UVs.");
+                else if (blinkRequested)
+                {
+                    texture.blinkOpenUV = blinkOpenUV;
+                    texture.blinkClosedUV = blinkClosedUV;
+                }
+                for (Int32 i = 0; i < geometries.Count; i++)
+                {
+                    Int32 materialIndex = baseMesh.matIndex[i];
+                    if (materialIndex < 0 || materialIndex >= udimTextures.Length || udimTextures[materialIndex] == null)
+                        continue;
+                    if (validBlinkSetup && blinkOpenUV?[i] != null)
+                    {
+                        texture.uv[i] = blinkOpenUV[i];
+                        continue;
+                    }
+                    if (!udimTextures[materialIndex].TryRemapUVs(texture.uv[i], out String error))
+                    {
+                        DestroyUdimTextures(udimTextureCache.Values);
+                        Log.Error($"Cannot import UDIM texture '{udimTexturePaths[materialIndex]}' referenced by FBX '{completePath}': mesh '{geometries[i].Name}' {error}");
+                        return null;
+                    }
                 }
                 if (!hasTexture)
                     texture = null;
@@ -326,6 +391,8 @@ namespace Memoria.Assets
             Int32 meshCount = baseMesh.vert.Length;
             Int32 materialCount = baseMesh.shader.Length;
             Material[] materials = new Material[materialCount];
+            Mesh[] blinkMeshes = texture?.blinkOpenUV != null ? new Mesh[meshCount] : null;
+            SkinnedMeshRenderer[] blinkRenderers = texture?.blinkOpenUV != null ? new SkinnedMeshRenderer[meshCount] : null;
             Transform[] bones = null;
             Matrix4x4[] bindPoses = null;
             if (anim != null)
@@ -361,7 +428,9 @@ namespace Memoria.Assets
                 materials[i] = ShadersLoader.CreateShaderMaterial(GetShaderPathFromType(baseMesh.shader[i], PersistenSingleton<EventEngine>.Instance.gMode));
                 if (materials[i] == null)
                     throw new FileNotFoundException($"Unknown shader {baseMesh.shader[i]}");
-                if (!String.IsNullOrEmpty(texture?.texturePath?[i]))
+                if (texture?.textureAtlas?[i] != null)
+                    materials[i].mainTexture = texture.textureAtlas[i];
+                else if (!String.IsNullOrEmpty(texture?.texturePath?[i]))
                     materials[i].mainTexture = AssetManager.LoadFromDisc<Texture2D>(texture.texturePath[i]);
             }
             for (Int32 i = 0; i < meshCount; i++)
@@ -374,6 +443,8 @@ namespace Memoria.Assets
                 mesh.triangles = baseMesh.tri[i];
                 if (texture?.uv?[i] != null && texture.uv[i].Length == vCount)
                     mesh.uv = texture.uv[i];
+                if (blinkMeshes != null && texture.blinkOpenUV[i] != null)
+                    blinkMeshes[i] = mesh;
                 if (extra?.normal?[i] != null && extra.normal[i].Length == vCount)
                     mesh.normals = extra.normal[i];
                 if (extra?.tangent?[i] != null && extra.tangent[i].Length == vCount)
@@ -390,6 +461,8 @@ namespace Memoria.Assets
                 GameObject meshGo = new GameObject(meshName);
                 meshGo.transform.parent = baseObject.transform;
                 SkinnedMeshRenderer meshRenderer = meshGo.AddComponent<SkinnedMeshRenderer>();
+                if (blinkRenderers != null && texture.blinkOpenUV[i] != null)
+                    blinkRenderers[i] = meshRenderer;
                 if (baseMesh.matIndex[i] < 0 || baseMesh.matIndex[i] >= materialCount)
                     throw new IndexOutOfRangeException($"Model mesh: mesh {i} has invalid material index {baseMesh.matIndex[i]} (max is {materialCount - 1})");
                 meshRenderer.material = materials[baseMesh.matIndex[i]];
@@ -397,7 +470,85 @@ namespace Memoria.Assets
                 if (anim != null)
                     meshRenderer.bones = bones;
             }
+            if (blinkMeshes != null)
+                baseObject.AddComponent<FbxUdimBlink>().Initialize(blinkRenderers, blinkMeshes, texture.blinkOpenUV, texture.blinkClosedUV);
             return baseObject;
+        }
+
+        private static Boolean TryPrepareUdimBlink(List<FbxGeometry> geometries, List<FbxMaterial> materials, Int32[] materialIndices, Vector2[][] sourceUVs, FbxUdimTexture[] udimTextures, out Boolean requested, out Vector2[][] openUVs, out Vector2[][] closedUVs, out String error)
+        {
+            requested = false;
+            openUVs = null;
+            closedUVs = null;
+            error = null;
+
+            for (Int32 materialIndex = 0; materialIndex < materials.Count; materialIndex++)
+            {
+                FbxMaterial material = materials[materialIndex];
+                Boolean hasOpenTile = material.HasProperty(FbxMaterial.BlinkOpenUdimProperty);
+                Boolean hasClosedTile = material.HasProperty(FbxMaterial.BlinkClosedUdimProperty);
+                if (!hasOpenTile && !hasClosedTile)
+                    continue;
+
+                requested = true;
+                if (!hasOpenTile || !hasClosedTile)
+                {
+                    error = $"material {materialIndex} must define both {FbxMaterial.BlinkOpenUdimProperty} and {FbxMaterial.BlinkClosedUdimProperty}";
+                    return false;
+                }
+                if (!material.TryGetInt32Property(FbxMaterial.BlinkOpenUdimProperty, out Int32 openTileNumber) ||
+                    !material.TryGetInt32Property(FbxMaterial.BlinkClosedUdimProperty, out Int32 closedTileNumber))
+                {
+                    error = $"material {materialIndex} blink tile properties must be integers";
+                    return false;
+                }
+                if (openTileNumber == closedTileNumber)
+                {
+                    error = $"material {materialIndex} uses the same UDIM tile {openTileNumber} for open and closed eyes";
+                    return false;
+                }
+                FbxUdimTexture udimTexture = materialIndex < udimTextures.Length ? udimTextures[materialIndex] : null;
+                if (udimTexture == null)
+                {
+                    error = $"material {materialIndex} does not use a loaded UDIM texture";
+                    return false;
+                }
+                if (!udimTexture.ContainsTile(openTileNumber) || !udimTexture.ContainsTile(closedTileNumber))
+                {
+                    error = $"material {materialIndex} requests unavailable UDIM tiles {openTileNumber} and {closedTileNumber}";
+                    return false;
+                }
+
+                Int32 materialBlinkVertexCount = 0;
+                for (Int32 geometryIndex = 0; geometryIndex < geometries.Count; geometryIndex++)
+                {
+                    if (materialIndices[geometryIndex] != materialIndex)
+                        continue;
+
+                    if (!udimTexture.TryPrepareBlinkUVs(sourceUVs[geometryIndex], openTileNumber, closedTileNumber, out Vector2[] meshOpenUVs, out Vector2[] meshClosedUVs, out Int32 blinkVertexCount, out String meshError))
+                    {
+                        error = $"mesh '{geometries[geometryIndex].Name}' {meshError}";
+                        return false;
+                    }
+                    if (blinkVertexCount == 0)
+                        continue;
+
+                    if (openUVs == null)
+                    {
+                        openUVs = new Vector2[geometries.Count][];
+                        closedUVs = new Vector2[geometries.Count][];
+                    }
+                    openUVs[geometryIndex] = meshOpenUVs;
+                    closedUVs[geometryIndex] = meshClosedUVs;
+                    materialBlinkVertexCount += blinkVertexCount;
+                }
+                if (materialBlinkVertexCount == 0)
+                {
+                    error = $"material {materialIndex} has no UV vertices in closed UDIM tile {closedTileNumber}";
+                    return false;
+                }
+            }
+            return true;
         }
 
         private static String GetShaderPathFromType(String shaderType, Int32 mode)
@@ -416,6 +567,12 @@ namespace Memoria.Assets
                 return (mode == 3 ? "WorldMap/SPS_Abr_" : "PSX/FieldSPS_Abr_") + abrType;
             }
             return shaderType;
+        }
+
+        private static void DestroyUdimTextures(IEnumerable<FbxUdimTexture> textures)
+        {
+            foreach (FbxUdimTexture texture in textures)
+                texture.Destroy();
         }
     }
 }
