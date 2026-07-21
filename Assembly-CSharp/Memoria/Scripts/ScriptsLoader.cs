@@ -263,6 +263,13 @@ namespace Memoria.Scripts
 
         public static Object GetOverloadedMethod(Type overloadId)
         {
+            if (s_result.Count == 0)
+            {
+                if (s_initializationTask == null)
+                    InitializeAsync();
+                s_initializationTask?.Wait();
+            }
+
             foreach (Result result in s_result)
                 if (result.OverloadableMethodScripts.TryGetValue(overloadId, out Type scriptType))
                     return scriptType.GetConstructor(Type.EmptyTypes).Invoke(null);
