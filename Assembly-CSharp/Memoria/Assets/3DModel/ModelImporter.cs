@@ -392,6 +392,7 @@ namespace Memoria.Assets
             Int32 materialCount = baseMesh.shader.Length;
             Material[] materials = new Material[materialCount];
             Mesh[] blinkMeshes = texture?.blinkOpenUV != null ? new Mesh[meshCount] : null;
+            SkinnedMeshRenderer[] blinkRenderers = texture?.blinkOpenUV != null ? new SkinnedMeshRenderer[meshCount] : null;
             Transform[] bones = null;
             Matrix4x4[] bindPoses = null;
             if (anim != null)
@@ -460,6 +461,8 @@ namespace Memoria.Assets
                 GameObject meshGo = new GameObject(meshName);
                 meshGo.transform.parent = baseObject.transform;
                 SkinnedMeshRenderer meshRenderer = meshGo.AddComponent<SkinnedMeshRenderer>();
+                if (blinkRenderers != null && texture.blinkOpenUV[i] != null)
+                    blinkRenderers[i] = meshRenderer;
                 if (baseMesh.matIndex[i] < 0 || baseMesh.matIndex[i] >= materialCount)
                     throw new IndexOutOfRangeException($"Model mesh: mesh {i} has invalid material index {baseMesh.matIndex[i]} (max is {materialCount - 1})");
                 meshRenderer.material = materials[baseMesh.matIndex[i]];
@@ -468,7 +471,7 @@ namespace Memoria.Assets
                     meshRenderer.bones = bones;
             }
             if (blinkMeshes != null)
-                baseObject.AddComponent<FbxUdimBlink>().Initialize(blinkMeshes, texture.blinkOpenUV, texture.blinkClosedUV);
+                baseObject.AddComponent<FbxUdimBlink>().Initialize(blinkRenderers, blinkMeshes, texture.blinkOpenUV, texture.blinkClosedUV);
             return baseObject;
         }
 

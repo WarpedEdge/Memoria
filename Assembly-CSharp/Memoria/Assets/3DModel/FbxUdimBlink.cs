@@ -9,26 +9,36 @@ namespace Memoria.Assets
         private const Single MaximumBlinkDelay = 6f;
         private const Single ClosedEyeDuration = 0.12f;
 
-        private Mesh[] _meshes;
-        private Vector2[][] _openUVs;
-        private Vector2[][] _closedUVs;
+        [SerializeField]
+        private BlinkTarget[] _targets;
         private Single _nextBlinkTime;
         private Single _openEyeTime;
         private Boolean _eyesClosed;
 
-        public void Initialize(Mesh[] meshes, Vector2[][] openUVs, Vector2[][] closedUVs)
+        public void Initialize(SkinnedMeshRenderer[] renderers, Mesh[] meshes, Vector2[][] openUVs, Vector2[][] closedUVs)
         {
-            _meshes = meshes;
-            _openUVs = openUVs;
-            _closedUVs = closedUVs;
-            ApplyUVs(_openUVs);
+            Int32 targetCount = 0;
+            for (Int32 i = 0; i < meshes.Length; i++)
+                if (meshes[i] != null)
+                    targetCount++;
+
+            _targets = new BlinkTarget[targetCount];
+            Int32 targetIndex = 0;
+            for (Int32 i = 0; i < meshes.Length; i++)
+            {
+                if (meshes[i] == null)
+                    continue;
+
+                _targets[targetIndex++] = new BlinkTarget(renderers[i], meshes[i], openUVs[i], closedUVs[i]);
+            }
+            ApplyUVs(false);
             _eyesClosed = false;
             ScheduleNextBlink();
         }
 
         private void Update()
         {
-            if (_meshes == null)
+            if (_targets == null)
                 return;
 
             Single currentTime = Time.realtimeSinceStartup;
@@ -38,14 +48,14 @@ namespace Memoria.Assets
                     return;
 
                 // Keep the open UVs until the next blink.
-                ApplyUVs(_openUVs);
+                ApplyUVs(false);
                 _eyesClosed = false;
                 ScheduleNextBlink();
             }
             else if (currentTime >= _nextBlinkTime)
             {
                 // Show the closed eyes for a moment.
-                ApplyUVs(_closedUVs);
+                ApplyUVs(true);
                 _eyesClosed = true;
                 _openEyeTime = currentTime + ClosedEyeDuration;
             }
@@ -53,24 +63,26 @@ namespace Memoria.Assets
 
         private void OnEnable()
         {
-            if (_meshes != null)
-                ScheduleNextBlink();
+            if (_targets == null)
+                return;
+
+            ApplyUVs(false);
+            _eyesClosed = false;
+            ScheduleNextBlink();
         }
 
         private void OnDisable()
         {
-            if (_meshes == null)
+            if (_targets == null)
                 return;
 
-            ApplyUVs(_openUVs);
+            ApplyUVs(false);
             _eyesClosed = false;
         }
 
         private void OnDestroy()
         {
-            _meshes = null;
-            _openUVs = null;
-            _closedUVs = null;
+            _targets = null;
         }
 
         private void ScheduleNextBlink()
@@ -78,12 +90,32 @@ namespace Memoria.Assets
             _nextBlinkTime = Time.realtimeSinceStartup + UnityEngine.Random.Range(MinimumBlinkDelay, MaximumBlinkDelay);
         }
 
-        private void ApplyUVs(Vector2[][] uvs)
+        private void ApplyUVs(Boolean useClosedUVs)
         {
-            for (Int32 i = 0; i < _meshes.Length; i++)
+            for (Int32 i = 0; i < _targets.Length; i++)
             {
-                if (_meshes[i] != null && uvs[i] != null)
-                    _meshes[i].uv = uvs[i];
+                BlinkTarget target = _targets[i];
+                Mesh mesh = target.Renderer != null && target.Renderer.sharedMesh != null ? target.Renderer.sharedMesh : target.ImportedMesh;
+                Vector2[] uvs = useClosedUVs ? target.ClosedUVs : target.OpenUVs;
+                if (mesh != null && uvs != null && mesh.vertexCount == uvs.Length)
+                    mesh.uv = uvs;
+            }
+        }
+
+        [Serializable]
+        private sealed class BlinkTarget
+        {
+            public SkinnedMeshRenderer Renderer;
+            public Mesh ImportedMesh;
+            public Vector2[] OpenUVs;
+            public Vector2[] ClosedUVs;
+
+            public BlinkTarget(SkinnedMeshRenderer renderer, Mesh importedMesh, Vector2[] openUVs, Vector2[] closedUVs)
+            {
+                Renderer = renderer;
+                ImportedMesh = importedMesh;
+                OpenUVs = openUVs;
+                ClosedUVs = closedUVs;
             }
         }
     }
