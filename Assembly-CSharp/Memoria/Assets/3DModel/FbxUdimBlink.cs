@@ -4,7 +4,7 @@ using UnityEngine;
 
 namespace Memoria.Assets
 {
-    internal sealed class FbxUdimBlink : MonoBehaviour
+    public sealed class FbxUdimBlink : MonoBehaviour
     {
         private const Single MinimumBlinkDelay = 2.5f;
         private const Single MaximumBlinkDelay = 6f;
@@ -43,6 +43,45 @@ namespace Memoria.Assets
             _eyesClosed = false;
             ScheduleNextBlink();
             Log.Message($"[FbxUdimBlink] Initialize model='{gameObject.name}' targets={_targets.Length} blinkVertices={blinkVertexCount} openApplied={appliedTargetCount} nextDelay={_nextBlinkTime - Time.realtimeSinceStartup:F2}s");
+        }
+
+        public static Boolean Transfer(GameObject sourceRoot, GameObject destinationRoot, SkinnedMeshRenderer[] sourceRenderers, SkinnedMeshRenderer[] destinationRenderers)
+        {
+            if (sourceRoot == null || destinationRoot == null || sourceRenderers == null || destinationRenderers == null || sourceRenderers.Length != destinationRenderers.Length)
+                return false;
+
+            FbxUdimBlink sourceBlink = sourceRoot.GetComponent<FbxUdimBlink>();
+            FbxUdimBlink destinationBlink = destinationRoot.GetComponent<FbxUdimBlink>();
+            if (sourceBlink == null || sourceBlink._targets == null)
+            {
+                Remove(destinationBlink);
+                return false;
+            }
+
+            BlinkTarget[] transferredTargets = new BlinkTarget[sourceBlink._targets.Length];
+            Int32 transferredTargetCount = 0;
+            for (Int32 i = 0; i < sourceRenderers.Length; i++)
+            {
+                BlinkTarget sourceTarget = sourceBlink.FindTarget(sourceRenderers[i]);
+                SkinnedMeshRenderer destinationRenderer = destinationRenderers[i];
+                if (sourceTarget == null || destinationRenderer == null || destinationRenderer.sharedMesh == null)
+                    continue;
+
+                transferredTargets[transferredTargetCount++] = new BlinkTarget(destinationRenderer, destinationRenderer.sharedMesh, sourceTarget.OpenUVs, sourceTarget.ClosedUVs);
+            }
+            if (transferredTargetCount == 0)
+            {
+                Log.Warning($"[FbxUdimBlink] Cannot transfer blink data from model '{sourceRoot.name}' to '{destinationRoot.name}': no matching skinned renderers");
+                Remove(destinationBlink);
+                return false;
+            }
+            if (transferredTargetCount != transferredTargets.Length)
+                Array.Resize(ref transferredTargets, transferredTargetCount);
+
+            if (destinationBlink == null)
+                destinationBlink = destinationRoot.AddComponent<FbxUdimBlink>();
+            destinationBlink.InitializeTransferredTargets(transferredTargets);
+            return true;
         }
 
         private void Start()
@@ -106,6 +145,19 @@ namespace Memoria.Assets
             _targets = null;
         }
 
+        private void InitializeTransferredTargets(BlinkTarget[] targets)
+        {
+            _targets = targets;
+            _eyesClosed = false;
+            _loggedFirstUpdate = false;
+            _loggedMeshReplacement = false;
+            _loggedTargetFailure = false;
+            Int32 appliedTargetCount = ApplyUVs(false);
+            ScheduleNextBlink();
+            enabled = true;
+            Log.Message($"[FbxUdimBlink] Transfer model='{gameObject.name}' targets={_targets.Length} openApplied={appliedTargetCount} nextDelay={_nextBlinkTime - Time.realtimeSinceStartup:F2}s");
+        }
+
         private void ScheduleNextBlink()
         {
             _nextBlinkTime = Time.realtimeSinceStartup + UnityEngine.Random.Range(MinimumBlinkDelay, MaximumBlinkDelay);
@@ -154,6 +206,26 @@ namespace Memoria.Assets
 
             _loggedTargetFailure = true;
             Log.Warning($"[FbxUdimBlink] Cannot apply blink UVs for model '{gameObject.name}': {reason}");
+        }
+
+        private BlinkTarget FindTarget(SkinnedMeshRenderer renderer)
+        {
+            if (renderer == null)
+                return null;
+
+            for (Int32 i = 0; i < _targets.Length; i++)
+                if (_targets[i] != null && _targets[i].Renderer == renderer)
+                    return _targets[i];
+            return null;
+        }
+
+        private static void Remove(FbxUdimBlink blink)
+        {
+            if (blink == null)
+                return;
+
+            blink._targets = null;
+            blink.enabled = false;
         }
 
         private static Int32 CountChangedUVs(Vector2[] openUVs, Vector2[] closedUVs)
