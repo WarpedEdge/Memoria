@@ -121,36 +121,43 @@ namespace Memoria.Assets
                     }
                 }
                 FbxUdimTexture[] udimTextures = new FbxUdimTexture[materials.Count];
+                String[] udimTexturePaths = new String[materials.Count];
                 Dictionary<String, FbxUdimTexture> udimTextureCache = new Dictionary<String, FbxUdimTexture>(StringComparer.Ordinal);
                 for (Int32 i = 0; i < materials.Count; i++)
                 {
                     baseMesh.shader[i] = materials[i].Shader;
                     if (materials[i].TexturePath != null)
                     {
-                        String texturePath = AssetManager.UsePathWithDefaultFolder(folderPath, materials[i].TexturePath);
                         if (!FbxUdimTexture.IsUdimPath(materials[i].TexturePath))
                         {
-                            texture.texturePath[i] = texturePath;
+                            texture.texturePath[i] = AssetManager.UsePathWithDefaultFolder(folderPath, materials[i].TexturePath);
                         }
                         else
                         {
+                            if (!FbxUdimTexture.TryResolvePath(folderPath, materials[i].TexturePath, out String safeTexturePath, out String texturePath, out String pathError))
+                            {
+                                DestroyUdimTextures(udimTextureCache.Values);
+                                Log.Error($"Cannot import UDIM texture '{texturePath}' referenced by FBX '{completePath}': {pathError}");
+                                return null;
+                            }
                             if (!hasTexture)
                             {
                                 DestroyUdimTextures(udimTextureCache.Values);
                                 Log.Error($"Cannot import UDIM texture '{texturePath}' referenced by FBX '{completePath}': the model has no UV coordinates");
                                 return null;
                             }
-                            if (!udimTextureCache.TryGetValue(texturePath, out FbxUdimTexture udimTexture))
+                            if (!udimTextureCache.TryGetValue(safeTexturePath, out FbxUdimTexture udimTexture))
                             {
-                                if (!FbxUdimTexture.TryCreate(texturePath, out udimTexture, out String error))
+                                if (!FbxUdimTexture.TryCreate(safeTexturePath, out udimTexture, out String error))
                                 {
                                     DestroyUdimTextures(udimTextureCache.Values);
                                     Log.Error($"Cannot import UDIM texture '{texturePath}' referenced by FBX '{completePath}': {error}");
                                     return null;
                                 }
-                                udimTextureCache.Add(texturePath, udimTexture);
+                                udimTextureCache.Add(safeTexturePath, udimTexture);
                             }
                             udimTextures[i] = udimTexture;
+                            udimTexturePaths[i] = texturePath;
                             texture.textureAtlas[i] = udimTexture.Texture;
                         }
                     }
@@ -162,9 +169,8 @@ namespace Memoria.Assets
                         continue;
                     if (!udimTextures[materialIndex].TryRemapUVs(texture.uv[i], out String error))
                     {
-                        String texturePath = AssetManager.UsePathWithDefaultFolder(folderPath, materials[materialIndex].TexturePath);
                         DestroyUdimTextures(udimTextureCache.Values);
-                        Log.Error($"Cannot import UDIM texture '{texturePath}' referenced by FBX '{completePath}': mesh '{geometries[i].Name}' {error}");
+                        Log.Error($"Cannot import UDIM texture '{udimTexturePaths[materialIndex]}' referenced by FBX '{completePath}': mesh '{geometries[i].Name}' {error}");
                         return null;
                     }
                 }

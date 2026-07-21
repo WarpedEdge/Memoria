@@ -12,6 +12,7 @@ namespace Memoria.Assets
         private const Int32 FirstTileNumber = 1001;
         private const Int32 TilesPerRow = 10;
         private const Int32 GutterSize = 2;
+        private const String SafePathPlaceholder = "__MemoriaUdimPlaceholder__";
 
         public Texture2D Texture { get; private set; }
 
@@ -29,7 +30,38 @@ namespace Memoria.Assets
             return !String.IsNullOrEmpty(path) && path.IndexOf(Placeholder, StringComparison.Ordinal) >= 0;
         }
 
-        public static Boolean TryCreate(String texturePath, out FbxUdimTexture result, out String error)
+        public static Boolean TryResolvePath(String defaultFolder, String texturePath, out String safeTexturePath, out String displayTexturePath, out String error)
+        {
+            safeTexturePath = null;
+            displayTexturePath = texturePath;
+            error = null;
+            Int32 placeholderIndex = texturePath.IndexOf(Placeholder, StringComparison.Ordinal);
+            if (placeholderIndex < 0 || texturePath.IndexOf(Placeholder, placeholderIndex + Placeholder.Length, StringComparison.Ordinal) >= 0)
+            {
+                error = "the texture path must contain exactly one <UDIM> placeholder";
+                return false;
+            }
+            if (texturePath.IndexOf(SafePathPlaceholder, StringComparison.Ordinal) >= 0)
+            {
+                error = "the texture path contains a reserved UDIM path token";
+                return false;
+            }
+
+            try
+            {
+                String pathWithoutIllegalCharacters = texturePath.Replace(Placeholder, SafePathPlaceholder);
+                safeTexturePath = pathWithoutIllegalCharacters.Contains("/") ? pathWithoutIllegalCharacters : Path.Combine(defaultFolder, pathWithoutIllegalCharacters);
+                displayTexturePath = safeTexturePath.Replace(SafePathPlaceholder, Placeholder);
+                return true;
+            }
+            catch (Exception exception)
+            {
+                error = exception.Message;
+                return false;
+            }
+        }
+
+        public static Boolean TryCreate(String safeTexturePath, out FbxUdimTexture result, out String error)
         {
             result = null;
             error = null;
@@ -38,10 +70,10 @@ namespace Memoria.Assets
 
             try
             {
-                String folderPath = Path.GetDirectoryName(texturePath);
-                String fileName = Path.GetFileName(texturePath);
-                Int32 placeholderIndex = fileName.IndexOf(Placeholder, StringComparison.Ordinal);
-                if (placeholderIndex < 0 || fileName.IndexOf(Placeholder, placeholderIndex + Placeholder.Length, StringComparison.Ordinal) >= 0)
+                String folderPath = Path.GetDirectoryName(safeTexturePath);
+                String fileName = Path.GetFileName(safeTexturePath);
+                Int32 placeholderIndex = fileName.IndexOf(SafePathPlaceholder, StringComparison.Ordinal);
+                if (placeholderIndex < 0 || fileName.IndexOf(SafePathPlaceholder, placeholderIndex + SafePathPlaceholder.Length, StringComparison.Ordinal) >= 0)
                 {
                     error = "the texture path must contain exactly one <UDIM> placeholder";
                     return false;
@@ -53,7 +85,7 @@ namespace Memoria.Assets
                 }
 
                 String prefix = fileName.Substring(0, placeholderIndex);
-                String suffix = fileName.Substring(placeholderIndex + Placeholder.Length);
+                String suffix = fileName.Substring(placeholderIndex + SafePathPlaceholder.Length);
                 Dictionary<Int32, String> tilePaths = new Dictionary<Int32, String>();
                 foreach (String candidatePath in Directory.GetFiles(folderPath))
                 {
@@ -251,7 +283,7 @@ namespace Memoria.Assets
 
         private static String GetSafeTextureName(String fileName)
         {
-            String name = Path.GetFileNameWithoutExtension(fileName).Replace(Placeholder, String.Empty).TrimEnd('.', '-', '_', ' ');
+            String name = Path.GetFileNameWithoutExtension(fileName).Replace(SafePathPlaceholder, String.Empty).TrimEnd('.', '-', '_', ' ');
             return String.IsNullOrEmpty(name) ? "UDIMAtlas" : name + "_UDIMAtlas";
         }
 
