@@ -33,7 +33,9 @@ namespace Memoria.Launcher.Utils.Downloads
 
         public static HttpClient CreateClient()
         {
-            return CreatePrimaryClient();
+            HttpClient primaryClient = CreatePrimaryClient(DecompressionMethods.None);
+            FallbackClients.Add(primaryClient, CreateDohFallbackClient(DecompressionMethods.None));
+            return primaryClient;
         }
 
         public static void DisposeClient(HttpClient client)
@@ -107,30 +109,40 @@ namespace Memoria.Launcher.Utils.Downloads
 
         private static HttpClient CreatePrimaryClient()
         {
-            HttpClient client = new HttpClient(CreateDefaultHandler(), disposeHandler: true);
+            return CreatePrimaryClient(DecompressionMethods.GZip | DecompressionMethods.Deflate);
+        }
+
+        private static HttpClient CreatePrimaryClient(DecompressionMethods automaticDecompression)
+        {
+            HttpClient client = new HttpClient(CreateDefaultHandler(automaticDecompression), disposeHandler: true);
             ApplyDefaultHeaders(client);
             return client;
         }
 
         private static HttpClient CreateDohFallbackClient()
         {
+            return CreateDohFallbackClient(DecompressionMethods.GZip | DecompressionMethods.Deflate);
+        }
+
+        private static HttpClient CreateDohFallbackClient(DecompressionMethods automaticDecompression)
+        {
             HttpClient cloudflareTransport = new HttpClient { BaseAddress = CloudflareDohEndpoint };
             HttpClient googleTransport = new HttpClient { BaseAddress = GoogleDohEndpoint };
             IDnsClient dnsClient = new DnsRacerClient(new DnsHttpClient(cloudflareTransport), new DnsHttpClient(googleTransport));
             DnsDelegatingHandler dnsHandler = new DnsDelegatingHandler(dnsClient, internetProtocolV4: true)
             {
-                InnerHandler = CreateDefaultHandler()
+                InnerHandler = CreateDefaultHandler(automaticDecompression)
             };
             HttpClient client = new HttpClient(dnsHandler, disposeHandler: true);
             ApplyDefaultHeaders(client);
             return client;
         }
 
-        private static HttpClientHandler CreateDefaultHandler()
+        private static HttpClientHandler CreateDefaultHandler(DecompressionMethods automaticDecompression)
         {
             return new HttpClientHandler
             {
-                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate
+                AutomaticDecompression = automaticDecompression
             };
         }
 
